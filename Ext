@@ -1,0 +1,127 @@
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import StaleElementReferenceException # Importar a exceção
+import time
+from webdriver_manager.chrome import ChromeDriverManager
+
+# Setup WebDriver
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+mercado_livre_url = "https://www.mercadolivre.com.br/"
+
+try:
+    driver.get(mercado_livre_url)
+    print("Acessou o site Mercado Livre")
+
+    search_box = WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.ID, "cb1-edit"))
+    )
+    print("Caixa de pesquisa encontrada")
+    search_box.send_keys("livros")
+    print("Preencheu a caixa de pesquisa com 'livros'")
+
+    search_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+    #search_button = WebDriverWait(driver, 10).until(
+    #    EC.element_to_be_clickable((By.XPATH, "//form[contains(@class, 'nav-searchform')]//button[@type='submit']"))
+    #)
+    print("Botão de pesquisa encontrado")
+    search_button.click()
+    print("Botão de pesquisa clicado")
+
+    results_container_xpath = "//ol[contains(@class, 'ui-search-layout--grid')]"
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, results_container_xpath))
+    )
+    print("Página de resultados carregada.")
+
+    product_links = []
+    print("Tentando extrair links de produtos usando JavaScript...")
+    try:
+        # Script JavaScript para encontrar todos os elementos de link e extrair seus hrefs
+        # Retorna uma lista de links únicos
+        js_script = """
+        var links = [];
+        var elements = document.evaluate(
+            "//li[contains(@class, 'ui-search-layout__item')]//a[contains(@class, 'poly-component__title')]",
+            document,
+            null,
+            XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+            null
+        );
+        for (var i = 0; i < elements.snapshotLength; i++) {
+            var href = elements.snapshotItem(i).getAttribute('href');
+            if (href) { // Garante que o href não seja nulo ou vazio
+                links.push(href);
+            }
+        }
+        // Retorna apenas links únicos
+        return Array.from(new Set(links));
+        """
+        extracted_hrefs = driver.execute_script(js_script)
+        
+        if extracted_hrefs:
+            product_links = extracted_hrefs
+            print(f"Encontrados {len(product_links)} links de produtos únicos via JavaScript.")
+        else:
+            # Isso pode acontecer se o XPath não encontrar nada ou o script JS tiver um problema
+            print("JavaScript não retornou links ou retornou uma lista vazia.")
+
+    except Exception as e_js:
+        print(f"Erro ao executar JavaScript para extrair links: {e_js}")
+        print("Tentando método alternativo de extração de links (pode ser propenso a StaleElementReferenceException)...")
+        # Método de fallback (menos robusto para páginas altamente dinâmicas)
+        try:
+            link_elements = driver.find_elements(By.XPATH, "//li[contains(@class, 'ui-search-layout__item')]//a[contains(@class, 'poly-component__title')]")
+            if not link_elements:
+                print("Nenhum item encontrado na página de resultados (método alternativo).")
+            else:
+                temp_links = []
+                print(f"Encontrados {len(link_elements)} elementos de link potenciais (método alternativo).")
+                for link_element in link_elements:
+                    try:
+                        href = link_element.get_attribute("href")
+                        if href:
+                           temp_links.append(href)
+                    except StaleElementReferenceException:
+                        # Se um elemento se tornar obsoleto durante esta iteração, registramos e continuamos
+                        print("  Aviso: StaleElementReferenceException capturada durante a extração de link no método alternativo. O elemento pode ter mudado.")
+                        continue 
+                # Garante links únicos também para o fallback
+                product_links = list(set(temp_links))
+                print(f"Encontrados {len(product_links)} links de produtos únicos via método alternativo.")
+        except Exception as e_fallback:
+            print(f"Erro no método alternativo de extração de links: {e_fallback}")
+
+
+    if not product_links:
+        print("Nenhum link de produto foi coletado. Verifique os seletores XPath, a estrutura da página, ou a página pode ser muito dinâmica.")
+    else:
+        print(f"Total de links únicos coletados para visitação: {len(product_links)}")
+
+    # Iterar através dos links coletados e visitar cada página de produto
+    for i, product_url in enumerate(product_links):
+        print(f"Acessando produto {i+1}/{len(product_links)}: {product_url}")
+        driver.get(product_url)
+        
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, "//h1[contains(@class, 'ui-pdp-title')]"))
+            )
+            print(f"  Página do produto '{driver.title}' carregada.")
+            # Adicione sua lógica de scraping para a página do produto aqui
+        except Exception as e_page_load:
+            print(f"  Erro ao carregar ou encontrar título na página do produto {product_url}: {e_page_load}")
+
+        time.sleep(1) # Pausa breve para observar; ajuste ou remova para scraping real
+
+    print("Todos os produtos visitados.")
+
+except Exception as e:
+    print(f"Ocorreu um erro geral no script: {e}")
+finally:
+    print("Fechando o navegador...")
+    if 'driver' in locals() and driver is not None:
+        driver.quit()
+    print("Navegador fechado.")
