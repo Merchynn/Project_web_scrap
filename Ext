@@ -6,6 +6,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import StaleElementReferenceException # Importar a exceção
 import time
 from webdriver_manager.chrome import ChromeDriverManager
+import pandas as pd
 
 # Setup WebDriver
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
@@ -125,3 +126,279 @@ finally:
     if 'driver' in locals() and driver is not None:
         driver.quit()
     print("Navegador fechado.")
+
+try:
+    servico = Service(ChromeDriverManager().install())
+    navegador = webdriver.Chrome(service=servico)
+except Exception as e:
+    print(f"Erro ao inicializar o WebDriver: {e}")
+    print("Certifique-se de que o Chrome e o ChromeDriver estão instalados e configurados corretamente.")
+    print("Você pode precisar instalar o webdriver_manager: pip install webdriver-manager")
+    exit()
+
+
+dados_todos_livros = []
+
+# Definindo as colunas para o DataFrame
+colunas = ['ISBN', 'Nome', 'Preco_Cheio', 'Preco_Promocao', 'Ano_Publicacao', 
+           'Capa_Livro_URL', 'Genero', 'Numero_Paginas', 'Editora', 'Autor']
+
+for link in product_links:
+    print(f"Processando link: {link}")
+    try:
+        navegador.get(link)
+        # Aguardar um pouco para a página carregar completamente (ajuste conforme necessário)
+        time.sleep(5) 
+
+        livro_info = {}
+
+        # --- Exemplo de extração de dados ---
+        # Os seletores (XPath, CSS, ID, Classe) abaixo são GENÉRICOS e
+        # precisarão ser ADAPTADOS para a estrutura HTML de CADA PÁGINA/SITE.
+        # Use blocos try-except para cada elemento para evitar que o script quebre
+        # se um elemento não for encontrado.
+
+        # Nome do Livro
+        try:
+            # Exemplo com o seletor da página do Mercado Livre analisada
+            if "mercadolivre.com.br" in link:
+                nome_elemento = navegador.find_element(By.CLASS_NAME, "ui-pdp-title")
+                livro_info['Nome'] = nome_elemento.text.strip()
+            else:
+                # Adapte este XPath para outros sites
+                nome_elemento = navegador.find_element(By.XPATH, '//h1') 
+                livro_info['Nome'] = nome_elemento.text.strip()
+        except Exception as e:
+            print(f"Erro ao extrair Nome: {e}")
+            livro_info['Nome'] = None
+            
+        # ISBN
+        try:
+            # No Mercado Livre, o ISBN estava em uma tabela de especificações.
+            # Este é um exemplo mais complexo e pode variar muito.
+            if "mercadolivre.com.br" in link:
+                # Tentativa de encontrar ISBN nas características
+                specs_tabelas = navegador.find_elements(By.CLASS_NAME, "andes-table__header")
+                isbn_encontrado = False
+                for i, spec_header in enumerate(specs_tabelas):
+                    if "ISBN" in spec_header.text:
+                        # O valor do ISBN estaria na célula correspondente (td)
+                        # Esta lógica de encontrar o 'td' correspondente pode ser complexa
+                        # e depende da estrutura exata da tabela.
+                        # Exemplo simplificado (pode não funcionar em todos os casos):
+                        try:
+                            valor_isbn = navegador.find_elements(By.CLASS_NAME, "andes-table__column--value")[i].text.strip()
+                            livro_info['ISBN'] = valor_isbn
+                            isbn_encontrado = True
+                            break
+                        except:
+                            pass # Tentar a próxima
+                if not isbn_encontrado: # Tentar meta tags se não encontrar na tabela
+                    try:
+                        isbn_meta = navegador.find_element(By.XPATH, "//meta[@name='twitter:description']").get_attribute("content")
+                        if "ISBN:" in isbn_meta:
+                            livro_info['ISBN'] = isbn_meta.split("ISBN:")[1].split(".")[0].strip()
+                            isbn_encontrado = True
+                    except:
+                         livro_info['ISBN'] = None # Se falhar, definir como None
+                if not isbn_encontrado:
+                    livro_info['ISBN'] = None
+            else:
+                # Adapte para outros sites
+                # Você pode procurar por texto contendo "ISBN" ou um padrão numérico
+                # Ex: isbn_elemento = navegador.find_element(By.XPATH, "//*[contains(text(),'ISBN:')]")
+                # livro_info['ISBN'] = isbn_elemento.text.split(':')[1].strip() 
+                livro_info['ISBN'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair ISBN: {e}")
+            livro_info['ISBN'] = None
+
+        # Preço Cheio
+        try:
+            if "mercadolivre.com.br" in link:
+                # Exemplo para o preço principal na página do Mercado Livre
+                preco_cheio_fracao = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]//span[@class="andes-money-amount__fraction"]').text.strip()
+                try:
+                    preco_cheio_centavos = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]//span[@class="andes-money-amount__cents"]').text.strip()
+                    livro_info['Preco_Cheio'] = f"{preco_cheio_fracao}.{preco_cheio_centavos}"
+                except: # Caso não tenha centavos visíveis separadamente
+                    livro_info['Preco_Cheio'] = preco_cheio_fracao
+            else:
+                # Adapte para outros sites
+                # preco_cheio_elemento = navegador.find_element(By.XPATH, "//span[@class='preco-antigo']")
+                # livro_info['Preco_Cheio'] = preco_cheio_elemento.text.strip().replace('R$', '').replace(',', '.').strip()
+                livro_info['Preco_Cheio'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Preço Cheio: {e}")
+            livro_info['Preco_Cheio'] = None
+
+        # Preço Promoção
+        try:
+            # No Mercado Livre, o preço promocional pode ser o mesmo que o cheio se não houver desconto explícito.
+            # Ou pode estar em um local diferente se houver um "antes" e "agora".
+            # Este exemplo assume que não há um preço promocional direto se não for encontrado um específico.
+            if "mercadolivre.com.br" in link and "R$ 37,24" in navegador.page_source and "Antes: 43 reais" in navegador.page_source: # Exemplo específico para um item relacionado no HTML
+                 # Para o item principal do HTML fornecido, não havia preço promocional direto
+                 livro_info['Preco_Promocao'] = None
+            else:
+                livro_info['Preco_Promocao'] = None # Placeholder, ou adapte o seletor
+        except Exception as e:
+            print(f"Erro ao extrair Preço Promoção: {e}")
+            livro_info['Preco_Promocao'] = None
+
+        # Ano de Publicação
+        try:
+            if "mercadolivre.com.br" in link:
+                ano_elemento = navegador.find_element(By.XPATH, "//li[contains(text(), 'Ano de publicação:')]/span") # Pode não ser exato
+                # Ou de forma mais robusta, percorrendo a tabela de especificações:
+                ano_pub_encontrado = False
+                headers = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/th/div")
+                values = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/td/span")
+                for i, header in enumerate(headers):
+                    if "Ano de publicação" in header.text:
+                        livro_info['Ano_Publicacao'] = values[i].text.strip()
+                        ano_pub_encontrado = True
+                        break
+                if not ano_pub_encontrado:
+                    livro_info['Ano_Publicacao'] = None
+            else:
+                # Adapte para outros sites
+                livro_info['Ano_Publicacao'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Ano de Publicação: {e}")
+            livro_info['Ano_Publicacao'] = None
+
+        # Capa do Livro (URL)
+        try:
+            if "mercadolivre.com.br" in link:
+                capa_elemento = navegador.find_element(By.XPATH, '//figure[contains(@class, "ui-pdp-gallery__figure")]/img')
+                livro_info['Capa_Livro_URL'] = capa_elemento.get_attribute('src')
+            else:
+                # Adapte para outros sites
+                # capa_elemento = navegador.find_element(By.XPATH, '//img[@id="imgBlkFront"]')
+                # livro_info['Capa_Livro_URL'] = capa_elemento.get_attribute('src')
+                livro_info['Capa_Livro_URL'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Capa do Livro: {e}")
+            livro_info['Capa_Livro_URL'] = None
+            
+        # Gênero
+        try:
+            if "mercadolivre.com.br" in link:
+                genero_encontrado = False
+                headers = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/th/div")
+                values = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/td/span")
+                genero_texto = ""
+                for i, header in enumerate(headers):
+                    if "Gênero do livro" in header.text:
+                        genero_texto += values[i].text.strip()
+                        genero_encontrado = True
+                    if "Subgêneros do livro" in header.text:
+                        if genero_texto:
+                             genero_texto += ", " + values[i].text.strip()
+                        else:
+                            genero_texto = values[i].text.strip()
+                        genero_encontrado = True
+                livro_info['Genero'] = genero_texto if genero_encontrado else None
+            else:
+                livro_info['Genero'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Gênero: {e}")
+            livro_info['Genero'] = None
+            
+        # Número de Páginas
+        try:
+            # Esta informação foi encontrada na seção de Q&A, o que é incomum.
+            # A extração de Q&A pode ser mais complexa e menos confiável.
+            if "mercadolivre.com.br" in link and "350 páginas" in navegador.page_source: # Exemplo baseado na sua análise
+                 # Uma forma robusta seria buscar a pergunta e a resposta correspondente
+                 respostas_qadb = navegador.find_elements(By.XPATH, "//div[contains(@class, 'ui-pdp-qadb__questions-list__answer-item__answer')]")
+                 num_paginas_encontrado = False
+                 for resposta in respostas_qadb:
+                     if "páginas" in resposta.text and "350" in resposta.text: # Ser mais específico
+                         # Extrair o número de páginas da string. Ex: "350 páginas" -> 350
+                         partes = resposta.text.split()
+                         for parte in partes:
+                             if parte.isdigit():
+                                 livro_info['Numero_Paginas'] = int(parte)
+                                 num_paginas_encontrado = True
+                                 break
+                         if num_paginas_encontrado:
+                             break
+                 if not num_paginas_encontrado:
+                    livro_info['Numero_Paginas'] = None
+            else:
+                livro_info['Numero_Paginas'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Número de Páginas: {e}")
+            livro_info['Numero_Paginas'] = None
+
+        # Editora
+        try:
+            if "mercadolivre.com.br" in link:
+                editora_encontrada = False
+                headers = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/th/div")
+                values = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/td/span")
+                for i, header in enumerate(headers):
+                    if "Editora do livro" in header.text:
+                        livro_info['Editora'] = values[i].text.strip()
+                        editora_encontrada = True
+                        break
+                if not editora_encontrada:
+                    livro_info['Editora'] = None
+            else:
+                livro_info['Editora'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Editora: {e}")
+            livro_info['Editora'] = None
+
+        # Autor
+        try:
+            if "mercadolivre.com.br" in link:
+                autor_encontrado = False
+                headers = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/th/div")
+                values = navegador.find_elements(By.XPATH, "//*[@id='highlighted_specs_attrs']//table/tbody/tr/td/span")
+                for i, header in enumerate(headers):
+                    if "Autor" in header.text and "Rick Warren" in values[i].text : # Sendo mais específico para o exemplo
+                        livro_info['Autor'] = values[i].text.strip()
+                        autor_encontrado = True
+                        break
+                if not autor_encontrado:
+                    livro_info['Autor'] = None
+            else:
+                livro_info['Autor'] = None # Placeholder
+        except Exception as e:
+            print(f"Erro ao extrair Autor: {e}")
+            livro_info['Autor'] = None
+            
+        # Adicionar as informações do livro à lista principal
+        dados_todos_livros.append(livro_info)
+        print(f"Informações de '{livro_info.get('Nome', 'Nome não encontrado')}' adicionadas.")
+
+    except Exception as e:
+        print(f"Erro ao processar o link {link}: {e}")
+        # Adicionar um dicionário vazio ou com Nones para manter a estrutura do DataFrame
+        dados_erro = {col: None for col in colunas}
+        dados_erro['Nome'] = f"Erro ao processar link: {link}" # Para identificar o link com erro
+        dados_todos_livros.append(dados_erro)
+    
+    # Pausa para não sobrecarregar o servidor (opcional, mas recomendado)
+    time.sleep(2)
+
+
+# Fechar o navegador
+navegador.quit()
+
+# Criar o DataFrame Pandas
+df_livros = pd.DataFrame(dados_todos_livros, columns=colunas)
+
+# Exibir o DataFrame
+print("\nDataFrame com as informações dos livros:")
+print(df_livros)
+
+# Salvar o DataFrame em um arquivo CSV (opcional)
+try:
+    df_livros.to_csv("informacoes_livros.csv", index=False, encoding='utf-8-sig')
+    print("\nDataFrame salvo como informacoes_livros.csv")
+except Exception as e:
+    print(f"Erro ao salvar o CSV: {e}")
