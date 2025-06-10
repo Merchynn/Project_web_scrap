@@ -7,6 +7,7 @@ from selenium.common.exceptions import StaleElementReferenceException # Importar
 import time
 from webdriver_manager.chrome import ChromeDriverManager
 import pandas as pd
+from selenium.common.exceptions import NoSuchElementException
 
 # Setup WebDriver
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
@@ -126,7 +127,6 @@ finally:
     if 'driver' in locals() and driver is not None:
         driver.quit()
     print("Navegador fechado.")
-
 try:
     servico = Service(ChromeDriverManager().install())
     navegador = webdriver.Chrome(service=servico)
@@ -215,36 +215,32 @@ for link in product_links:
 
         # Preço Cheio
         try:
-            if "mercadolivre.com.br" in link:
-                # Exemplo para o preço principal na página do Mercado Livre
-                preco_cheio_fracao = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]//span[@class="andes-money-amount__fraction"]').text.strip()
-                try:
-                    preco_cheio_centavos = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]//span[@class="andes-money-amount__cents"]').text.strip()
-                    livro_info['Preco_Cheio'] = f"{preco_cheio_fracao}.{preco_cheio_centavos}"
-                except: # Caso não tenha centavos visíveis separadamente
-                    livro_info['Preco_Cheio'] = preco_cheio_fracao
-            else:
-                # Adapte para outros sites
-                # preco_cheio_elemento = navegador.find_element(By.XPATH, "//span[@class='preco-antigo']")
-                # livro_info['Preco_Cheio'] = preco_cheio_elemento.text.strip().replace('R$', '').replace(',', '.').strip()
-                livro_info['Preco_Cheio'] = None # Placeholder
-        except Exception as e:
-            print(f"Erro ao extrair Preço Cheio: {e}")
-            livro_info['Preco_Cheio'] = None
-
-        # Preço Promoção
-        try:
-            # No Mercado Livre, o preço promocional pode ser o mesmo que o cheio se não houver desconto explícito.
-            # Ou pode estar em um local diferente se houver um "antes" e "agora".
-            # Este exemplo assume que não há um preço promocional direto se não for encontrado um específico.
-            if "mercadolivre.com.br" in link and "R$ 37,24" in navegador.page_source and "Antes: 43 reais" in navegador.page_source: # Exemplo específico para um item relacionado no HTML
-                 # Para o item principal do HTML fornecido, não havia preço promocional direto
-                 livro_info['Preco_Promocao'] = None
-            else:
-                livro_info['Preco_Promocao'] = None # Placeholder, ou adapte o seletor
-        except Exception as e:
-            print(f"Erro ao extrair Preço Promoção: {e}")
-            livro_info['Preco_Promocao'] = None
+                    # Tenta encontrar o preço original (riscado), o que indica que há uma promoção.
+                    preco_cheio_elemento = navegador.find_element(By.CLASS_NAME, "andes-money-amount--previous")
+                    
+                    # Extrai o valor riscado como "Preço Cheio"
+                    p_cheio_fracao = preco_cheio_elemento.find_element(By.CLASS_NAME, 'andes-money-amount__fraction').text
+                    p_cheio_centavos = preco_cheio_elemento.find_element(By.CLASS_NAME, 'andes-money-amount__cents').text
+                    livro_info['Preco_Cheio'] = f"{p_cheio_fracao}.{p_cheio_centavos}"
+                    
+                    # Se o preço riscado foi encontrado, o preço principal da página é o "Preço de Promoção".
+                    container_preco_principal = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]')
+                    p_promo_fracao = container_preco_principal.find_element(By.CLASS_NAME, 'andes-money-amount__fraction').text
+                    p_promo_centavos = container_preco_principal.find_element(By.CLASS_NAME, 'andes-money-amount__cents').text
+                    livro_info['Preco_Promocao'] = f"{p_promo_fracao}.{p_promo_centavos}"
+                    
+                    
+        except NoSuchElementException:
+                    # Se o elemento de preço riscado não for encontrado, significa que não há promoção.
+                    # Portanto, o preço principal é o "Preço Cheio" e não há "Preço Promoção".
+                    livro_info['Preco_Promocao'] = None
+                    try:
+                        container_preco_principal = navegador.find_element(By.XPATH, '//div[contains(@class, "ui-pdp-price__main-container")]')
+                        p_cheio_fracao = container_preco_principal.find_element(By.CLASS_NAME, 'andes-money-amount__fraction').text
+                        p_cheio_centavos = container_preco_principal.find_element(By.CLASS_NAME, 'andes-money-amount__cents').text
+                        livro_info['Preco_Cheio'] = f"{p_cheio_fracao}.{p_cheio_centavos}"
+                    except NoSuchElementException:
+                        livro_info['Preco_Cheio'] = None
 
         # Ano de Publicação
         try:
